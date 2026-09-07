@@ -252,6 +252,7 @@
         </div>
       </div>
       <div class="field-row" style="margin-bottom:14px;">
+        <button class="btn btn-ghost" onclick="abrirModalBombeiro(perfilAtivoId)">Editar dados</button>
         <button class="btn btn-primary" onclick="abrirMovimento('entrega')">+ Entregar fardamento</button>
       </div>
       <h2 class="section-title">Fardamento atribuído</h2>
@@ -393,13 +394,18 @@
   <div class="modal">
     <button class="modal-close" onclick="fecharModal('modal-bombeiro')">✕</button>
     <div class="modal-handle"></div>
-    <h3>Novo bombeiro</h3>
+    <h3 id="mb-titulo">Novo bombeiro</h3>
     <label>Nome</label>
     <input type="text" id="mb-nome" placeholder="Nome completo">
     <label>Nº mecanográfico</label>
     <input type="text" id="mb-numero" placeholder="Ex: 128">
     <label>Posto / categoria (opcional)</label>
     <input type="text" id="mb-posto" placeholder="Ex: Bombeiro de 2ª">
+    <label>Quadro</label>
+    <select id="mb-quadro">
+      <option value="Quadro Ativo">Quadro Ativo</option>
+      <option value="Quadro de Honra">Quadro de Honra</option>
+    </select>
     <button class="btn btn-primary" style="margin-top:16px;" onclick="gravarBombeiro()">Guardar bombeiro</button>
   </div>
 </div>
@@ -741,11 +747,12 @@ function renderBombeiros(){
   }
   list.innerHTML = filtrados.map(b=>{
     const nItens = Object.values(b.atribuicoes||{}).reduce((s,i)=>s+i.quantidade,0);
+    const quadroBadge = (b.quadro==='Quadro de Honra') ? `<span style="font-family:var(--font-mono);font-size:10px;background:#F2E2C2;color:#7A5A00;padding:2px 7px;border-radius:10px;margin-left:6px;">Quadro de Honra</span>` : '';
     return `
     <div class="list-item" onclick="abrirPerfilBombeiro('${b.id}')">
       <div class="main">
-        <div class="name">${b.nome}</div>
-        <div class="meta">Nº ${b.numero||'—'} · ${nItens} peça${nItens===1?'':'s'} atribuída${nItens===1?'':'s'}</div>
+        <div class="name">${b.nome}${quadroBadge}</div>
+        <div class="meta">Nº ${b.numero||'—'}${b.posto?' · '+b.posto:''} · ${nItens} peça${nItens===1?'':'s'} atribuída${nItens===1?'':'s'}</div>
       </div>
       <span class="chev">›</span>
     </div>`;
@@ -753,23 +760,43 @@ function renderBombeiros(){
 }
 document.getElementById('bombeiro-search').addEventListener('input', renderBombeiros);
 
-function abrirModalBombeiro(){
-  document.getElementById('mb-nome').value = '';
-  document.getElementById('mb-numero').value = '';
-  document.getElementById('mb-posto').value = '';
+function abrirModalBombeiro(id){
+  editBombeiroId = id || null;
+  if(id){
+    const b = db.bombeiros.find(x=>x.id===id);
+    if(!b) return;
+    document.getElementById('mb-titulo').textContent = 'Editar bombeiro';
+    document.getElementById('mb-nome').value = b.nome;
+    document.getElementById('mb-numero').value = b.numero||'';
+    document.getElementById('mb-posto').value = b.posto||'';
+    document.getElementById('mb-quadro').value = b.quadro||'Quadro Ativo';
+  } else {
+    document.getElementById('mb-titulo').textContent = 'Novo bombeiro';
+    document.getElementById('mb-nome').value = '';
+    document.getElementById('mb-numero').value = '';
+    document.getElementById('mb-posto').value = '';
+    document.getElementById('mb-quadro').value = 'Quadro Ativo';
+  }
   abrirModal('modal-bombeiro');
 }
+let editBombeiroId = null;
 async function gravarBombeiro(){
   if(!conectado){ toast('Sem ligação à base de dados'); return; }
   const nome = document.getElementById('mb-nome').value.trim();
   const numero = document.getElementById('mb-numero').value.trim();
   const posto = document.getElementById('mb-posto').value.trim();
+  const quadro = document.getElementById('mb-quadro').value;
   if(!nome){ toast('Indica o nome do bombeiro'); return; }
   try{
-    const id = bombeirosCol.doc().id;
-    await bombeirosCol.doc(id).set({nome, numero, posto, atribuicoes:{}});
+    if(editBombeiroId){
+      await bombeirosCol.doc(editBombeiroId).update({nome, numero, posto, quadro});
+      toast('Bombeiro atualizado');
+    } else {
+      const id = bombeirosCol.doc().id;
+      await bombeirosCol.doc(id).set({nome, numero, posto, quadro, atribuicoes:{}});
+      toast('Bombeiro adicionado');
+    }
     fecharModal('modal-bombeiro');
-    toast('Bombeiro adicionado');
   }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
 }
 function iniciais(nome){ return nome.split(' ').filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join(''); }
@@ -779,7 +806,7 @@ function abrirPerfilBombeiro(id, silencioso){
   if(!b) return;
   document.getElementById('bp-avatar').textContent = iniciais(b.nome)||'??';
   document.getElementById('bp-nome').textContent = b.nome;
-  document.getElementById('bp-meta').textContent = `Nº ${b.numero||'—'}${b.posto?' · '+b.posto:''}`;
+  document.getElementById('bp-meta').textContent = `Nº ${b.numero||'—'}${b.posto?' · '+b.posto:''} · ${b.quadro||'Quadro Ativo'}`;
 
   const atrWrap = document.getElementById('bp-atribuicoes');
   const atribs = Object.values(b.atribuicoes||{});
