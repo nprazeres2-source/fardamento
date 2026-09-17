@@ -260,6 +260,12 @@
         <button class="btn btn-ghost" onclick="abrirModalBombeiro(perfilAtivoId)">Editar dados</button>
         <button class="btn btn-primary" onclick="abrirMovimento('entrega')">+ Entregar fardamento</button>
       </div>
+
+      <h2 class="section-title">Medidas</h2>
+      <div class="card" id="bp-medidas">
+        <div class="empty-state" style="padding:16px 0;"><p>Sem medidas registadas.</p></div>
+      </div>
+      <button class="btn btn-ghost" style="margin-bottom:14px;" onclick="abrirModalMedidas(perfilAtivoId)">Editar medidas</button>
       <h2 class="section-title">Fardamento atribuído</h2>
       <div class="card" id="bp-atribuicoes">
         <div class="empty-state" style="padding:16px 0;"><p>Sem fardamento atribuído.</p></div>
@@ -415,6 +421,18 @@
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="modal-medidas">
+  <div class="modal">
+    <button class="modal-close" onclick="fecharModal('modal-medidas')">✕</button>
+    <div class="modal-handle"></div>
+    <h3>Medidas do bombeiro</h3>
+    <p class="helper">Regista aqui os tamanhos/medidas deste bombeiro (ex: Casaco, Calças, Botas, Luvas, Capacete, Altura) para facilitar a entrega de fardamento.</p>
+    <div id="md-linhas"></div>
+    <button class="btn btn-ghost" style="margin-top:4px;" onclick="addMedidaRow()">+ Adicionar medida</button>
+    <button class="btn btn-primary" style="margin-top:16px;" onclick="gravarMedidas()">Guardar medidas</button>
+  </div>
+</div>
+
 <div id="talao-print"></div>
 
 <div class="modal-overlay hidden" id="modal-talao">
@@ -441,6 +459,11 @@
   ...
 }'></textarea>
     <button class="btn btn-primary" style="margin-top:12px;" onclick="ligarFirebase()">Ligar</button>
+    <button class="btn btn-steel" id="btn-backup" style="margin-top:10px; display:none;" onclick="exportarBackup()">📥 Exportar cópia de segurança (JSON)</button>
+    <p class="helper" id="backup-helper" style="display:none;">Descarrega um ficheiro com todos os artigos, bombeiros e movimentos, tal como estão neste momento.</p>
+    <button class="btn btn-ghost" id="btn-restore" style="margin-top:14px; display:none; border-color:var(--primary); color:var(--primary);" onclick="document.getElementById('input-restore').click()">📤 Repor cópia de segurança</button>
+    <input type="file" id="input-restore" accept=".json,application/json" style="display:none;" onchange="if(this.files[0]) importarBackup(this.files[0]); this.value='';">
+    <p class="helper" id="restore-helper" style="display:none; color:var(--primary-dark); font-weight:600;">⚠️ Substitui TODOS os dados atuais (em todos os equipamentos ligados) pelos do ficheiro escolhido. Não pode ser desfeito.</p>
     <button class="btn-danger-text" id="cfg-remover" style="display:none;" onclick="desligarFirebase()">Desligar e remover configuração deste equipamento</button>
   </div>
 </div>
@@ -492,6 +515,10 @@ function ligarComConfig(cfg){
     conectado = true;
     document.querySelector('#modal-config .modal-close').style.display='block';
     document.getElementById('cfg-remover').style.display='block';
+    document.getElementById('btn-backup').style.display='block';
+    document.getElementById('backup-helper').style.display='block';
+    document.getElementById('btn-restore').style.display='block';
+    document.getElementById('restore-helper').style.display='block';
     fecharModal('modal-config');
     const st = document.getElementById('conn-status');
     st.textContent = '● sincronizado'; st.className='ok';
@@ -508,6 +535,72 @@ function desligarFirebase(){
   location.reload();
 }
 function tentarFecharConfig(){ if(conectado) fecharModal('modal-config'); }
+function exportarBackup(){
+  const payload = {
+    exportadoEm: new Date().toISOString(),
+    artigos: db.artigos,
+    bombeiros: db.bombeiros,
+    movimentos: db.movimentos
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `fardamento-backup-${hoje()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Cópia de segurança descarregada');
+}
+async function limparColecao(col){
+  const snap = await col.get();
+  const docs = snap.docs;
+  for(let i=0;i<docs.length;i+=400){
+    const batch = dbFire.batch();
+    docs.slice(i,i+400).forEach(d=>batch.delete(d.ref));
+    await batch.commit();
+  }
+}
+async function escreverColecao(col, items){
+  for(let i=0;i<items.length;i+=400){
+    const batch = dbFire.batch();
+    items.slice(i,i+400).forEach(item=>{
+      const {id, ...rest} = item;
+      if(!id) return;
+      batch.set(col.doc(id), rest);
+    });
+    await batch.commit();
+  }
+}
+async function importarBackup(file){
+  if(!conectado){ toast('Sem ligação à base de dados'); return; }
+  try{
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if(!data || !Array.isArray(data.artigos) || !Array.isArray(data.bombeiros) || !Array.isArray(data.movimentos)){
+      toast('Ficheiro inválido ou incompleto');
+      return;
+    }
+    const dataExport = data.exportadoEm ? new Date(data.exportadoEm).toLocaleString('pt-PT') : 'desconhecida';
+    const aviso = `Vais REPOR a base de dados a partir de um ficheiro exportado em ${dataExport}.\n\nTodos os artigos, bombeiros e movimentos ATUAIS serão apagados e substituídos pelos do ficheiro — em todos os equipamentos ligados. Não pode ser desfeito.\n\nQueres mesmo continuar?`;
+    if(!confirm(aviso)) return;
+    if(!confirm('Última confirmação: apagar tudo e repor a partir do ficheiro?')) return;
+
+    toast('A repor a base de dados… não feches a app');
+    await limparColecao(artigosCol);
+    await limparColecao(bombeirosCol);
+    await limparColecao(movimentosCol);
+    await escreverColecao(artigosCol, data.artigos);
+    await escreverColecao(bombeirosCol, data.bombeiros);
+    await escreverColecao(movimentosCol, data.movimentos);
+    fecharModal('modal-config');
+    toast('Cópia de segurança reposta com sucesso');
+  }catch(e){
+    console.error(e);
+    toast('Erro ao repor — verifica o ficheiro e a ligação');
+  }
+}
 document.getElementById('btn-config').addEventListener('click', ()=>{
   document.getElementById('cfg-input').value = localStorage.getItem('firebaseConfig')||'';
   abrirModal('modal-config');
@@ -819,6 +912,12 @@ function abrirPerfilBombeiro(id, silencioso){
     ? '<div class="empty-state" style="padding:16px 0;"><p>Sem fardamento atribuído.</p></div>'
     : atribs.map(a=>`<div class="item-row"><div class="info"><b>${a.artigoNome}</b><span>Tam. ${a.tamanho} · ${a.quantidade} un. · desde ${fmtData(a.desde)}</span></div></div>`).join('');
 
+  const medidasWrap = document.getElementById('bp-medidas');
+  const medEntries = Object.entries(b.medidas||{});
+  medidasWrap.innerHTML = medEntries.length===0
+    ? '<div class="empty-state" style="padding:16px 0;"><p>Sem medidas registadas.</p></div>'
+    : `<div class="size-grid">${medEntries.map(([campo,valor])=>`<span class="size-chip">${campo}: ${valor}</span>`).join('')}</div>`;
+
   const histWrap = document.getElementById('bp-historico');
   const movs = db.movimentos.filter(m=>m.bombeiroId===id).sort((a,b2)=>(b2.criadoEm||0)-(a.criadoEm||0));
   histWrap.innerHTML = movs.length===0
@@ -843,6 +942,46 @@ async function removerBombeiro(){
   if(!confirm('Remover este bombeiro? O histórico de movimentos será mantido.')) return;
   try{ await bombeirosCol.doc(perfilAtivoId).delete(); goTo('bombeiros'); }
   catch(e){ toast('Erro ao remover'); }
+}
+
+let medidasBombeiroId = null;
+function abrirModalMedidas(id){
+  medidasBombeiroId = id;
+  const b = db.bombeiros.find(x=>x.id===id);
+  const wrap = document.getElementById('md-linhas');
+  wrap.innerHTML = '';
+  const entries = Object.entries((b && b.medidas) || {});
+  if(entries.length===0){ addMedidaRow(); }
+  else entries.forEach(([campo,valor])=>addMedidaRow(campo,valor));
+  abrirModal('modal-medidas');
+}
+function addMedidaRow(campo='', valor=''){
+  const wrap = document.getElementById('md-linhas');
+  const row = document.createElement('div');
+  row.className = 'size-row';
+  row.style.gridTemplateColumns = '1fr 1fr 28px';
+  row.innerHTML = `
+    <input type="text" placeholder="Ex: Casaco" value="${campo}" class="md-campo">
+    <input type="text" placeholder="Ex: L" value="${valor}" class="md-valor">
+    <button class="rm" onclick="this.parentElement.remove()">✕</button>
+  `;
+  wrap.appendChild(row);
+}
+async function gravarMedidas(){
+  if(!conectado){ toast('Sem ligação à base de dados'); return; }
+  if(!medidasBombeiroId) return;
+  const rows = document.querySelectorAll('#md-linhas .size-row');
+  const medidas = {};
+  rows.forEach(r=>{
+    const campo = r.querySelector('.md-campo').value.trim();
+    const valor = r.querySelector('.md-valor').value.trim();
+    if(campo) medidas[campo] = valor;
+  });
+  try{
+    await bombeirosCol.doc(medidasBombeiroId).update({medidas});
+    fecharModal('modal-medidas');
+    toast('Medidas guardadas');
+  }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
 }
 
 /* ---------------- ASSINATURA DIGITAL ---------------- */
