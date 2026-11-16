@@ -604,21 +604,33 @@ function ligarFirebase(){
   try{ cfg = new Function('return (' + raw + ')')(); }
   catch(e){ toast('Configuração inválida — verifica o texto colado'); return; }
   if(!cfg || !cfg.apiKey || !cfg.projectId){ toast('Configuração incompleta — falta apiKey ou projectId'); return; }
+  const jaLigado = fbIniciado;
   localStorage.setItem('firebaseConfig', JSON.stringify(cfg));
+  if(jaLigado){ location.reload(); return; }
   ligarComConfig(cfg);
 }
 let listenersAtivos=false;
 let auditCol=null;
+let fbIniciado=false, authRegistado=false;
 function ligarComConfig(cfg){
   try{
-    if(!firebase.apps.length) firebase.initializeApp(cfg);
-    dbFire = firebase.firestore();
-    dbFire.enablePersistence().catch(()=>{});
-    artigosCol = dbFire.collection('artigos');
-    bombeirosCol = dbFire.collection('bombeiros');
-    movimentosCol = dbFire.collection('movimentos');
-    auditCol = dbFire.collection('auditoria');
+    if(!fbIniciado){
+      if(!firebase.apps.length) firebase.initializeApp(cfg);
+      dbFire = firebase.firestore();
+      // a cache offline é opcional: nunca deve impedir a ligação
+      try{
+        const pr = dbFire.enablePersistence({synchronizeTabs:true});
+        if(pr && pr.catch) pr.catch(()=>{});
+      }catch(_){ /* já iniciado ou não suportado */ }
+      artigosCol = dbFire.collection('artigos');
+      bombeirosCol = dbFire.collection('bombeiros');
+      movimentosCol = dbFire.collection('movimentos');
+      auditCol = dbFire.collection('auditoria');
+      fbIniciado = true;
+    }
     fecharModal('modal-config');
+    if(authRegistado) return;
+    authRegistado = true;
     firebase.auth().onAuthStateChanged(user=>{
       const st = document.getElementById('conn-status');
       if(user){
