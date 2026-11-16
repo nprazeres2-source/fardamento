@@ -491,6 +491,7 @@
     <h3>Movimento registado</h3>
     <p class="helper">O talão pode ser impresso ou guardado em PDF, já com as assinaturas.</p>
     <button class="btn btn-primary" style="margin-top:14px;" onclick="imprimirTalao()">🖨️ Imprimir / Guardar talão</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="abrirEdicaoMov()">✎ Editar movimento</button>
     <button class="btn btn-ghost" style="margin-top:8px;" onclick="fecharModal('modal-talao')">Fechar</button>
   </div>
 </div>
@@ -506,6 +507,45 @@
     <div id="login-erro" style="color:var(--primary-dark); font-size:12.5px; font-weight:600; margin-top:8px; min-height:16px;"></div>
     <button class="btn btn-primary" style="margin-top:8px;" onclick="entrar()">Entrar</button>
     <button class="btn-danger-text" style="display:block; margin:6px auto 0; color:var(--ink-soft);" onclick="recuperarSenha()">Esqueci-me da senha</button>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-editar-mov">
+  <div class="modal">
+    <button class="modal-close" onclick="fecharModal('modal-editar-mov')">✕</button>
+    <div class="modal-handle"></div>
+    <h3 id="em-titulo">Editar movimento</h3>
+    <p class="helper">O stock e as atribuições são recalculados automaticamente. As assinaturas já gravadas não podem ser alteradas.</p>
+    <div id="em-bombeiro-wrap">
+      <label>Bombeiro</label>
+      <select id="em-bombeiro"></select>
+    </div>
+    <label>Data</label>
+    <input type="date" id="em-data">
+    <label>Adicionar artigo</label>
+    <select id="em-artigo"></select>
+    <div class="field-row" style="margin-top:8px;">
+      <select id="em-tamanho"></select>
+      <input type="number" id="em-qtd" placeholder="Qtd" min="1" value="1">
+    </div>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="emAdicionarItem()">+ Adicionar à lista</button>
+    <div id="em-itens" style="margin-top:14px;"></div>
+    <label>Observações</label>
+    <textarea id="em-obs"></textarea>
+    <button class="btn btn-primary" style="margin-top:16px;" onclick="gravarEdicaoMov()">Guardar alterações</button>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="fecharModal('modal-editar-mov')">Cancelar</button>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-auditoria">
+  <div class="modal">
+    <button class="modal-close" onclick="fecharModal('modal-auditoria')">✕</button>
+    <div class="modal-handle"></div>
+    <h3>Registo de alterações</h3>
+    <p class="helper">Últimas 300 alterações, com o utilizador que as fez. Visível apenas para administradores.</p>
+    <div class="search-bar" style="margin-top:10px;"><span>🔎</span><input type="text" id="aud-busca" placeholder="Filtrar por utilizador, artigo, bombeiro…"></div>
+    <div id="aud-lista"></div>
+    <button class="btn btn-ghost" style="margin-top:8px;" onclick="carregarAuditoria()">Atualizar</button>
   </div>
 </div>
 
@@ -527,6 +567,7 @@
     <button class="btn btn-ghost" id="btn-restore" style="margin-top:14px; display:none; border-color:var(--primary); color:var(--primary);" onclick="document.getElementById('input-restore').click()">📤 Repor cópia de segurança</button>
     <input type="file" id="input-restore" accept=".json,application/json" style="display:none;" onchange="if(this.files[0]) importarBackup(this.files[0]); this.value='';">
     <p class="helper" id="restore-helper" style="display:none; color:var(--primary-dark); font-weight:600;">⚠️ Substitui TODOS os dados atuais (em todos os equipamentos ligados) pelos do ficheiro escolhido. Não pode ser desfeito.</p>
+    <button class="btn btn-steel" id="btn-auditoria" style="margin-top:10px; display:none;" onclick="abrirAuditoria()">📋 Registo de alterações (administrador)</button>
     <button class="btn btn-ghost" id="btn-logout" style="margin-top:14px; display:none;" onclick="terminarSessao()">Terminar sessão</button>
     <button class="btn-danger-text" id="cfg-remover" style="display:none;" onclick="desligarFirebase()">Desligar e remover configuração deste equipamento</button>
   </div>
@@ -567,6 +608,7 @@ function ligarFirebase(){
   ligarComConfig(cfg);
 }
 let listenersAtivos=false;
+let auditCol=null;
 function ligarComConfig(cfg){
   try{
     if(!firebase.apps.length) firebase.initializeApp(cfg);
@@ -575,6 +617,7 @@ function ligarComConfig(cfg){
     artigosCol = dbFire.collection('artigos');
     bombeirosCol = dbFire.collection('bombeiros');
     movimentosCol = dbFire.collection('movimentos');
+    auditCol = dbFire.collection('auditoria');
     fecharModal('modal-config');
     firebase.auth().onAuthStateChanged(user=>{
       const st = document.getElementById('conn-status');
@@ -587,8 +630,10 @@ function ligarComConfig(cfg){
         ['backup-helper','restore-helper'].forEach(i=>document.getElementById(i).style.display='block');
         fecharModal('modal-login');
         st.textContent = '● ' + (user.email||'sincronizado'); st.className='ok';
+        verificarAdmin();
       } else {
         conectado = false;
+        document.getElementById('btn-auditoria').style.display='none';
         st.textContent = '● sem sessão'; st.className='';
         abrirModal('modal-login');
       }
@@ -657,6 +702,7 @@ function exportarBackup(){
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  auditar('exportar','backup', `Cópia exportada: ${db.artigos.length} artigos, ${db.bombeiros.length} bombeiros, ${db.movimentos.length} movimentos`);
   toast('Cópia de segurança descarregada');
 }
 async function limparColecao(col){
@@ -700,6 +746,7 @@ async function importarBackup(file){
     await escreverColecao(artigosCol, data.artigos);
     await escreverColecao(bombeirosCol, data.bombeiros);
     await escreverColecao(movimentosCol, data.movimentos);
+    auditar('repor','backup', `Base de dados reposta a partir de ficheiro de ${dataExport}: ${data.artigos.length} artigos, ${data.bombeiros.length} bombeiros, ${data.movimentos.length} movimentos`);
     fecharModal('modal-config');
     toast('Cópia de segurança reposta com sucesso');
   }catch(e){
@@ -905,8 +952,10 @@ async function gravarArtigo(){
   });
   if(Object.keys(tamanhos).length===0){ toast('Adiciona pelo menos um tamanho'); return; }
   try{
+    const eNovo = !editArtigoId;
     const id = editArtigoId || artigosCol.doc().id;
     await artigosCol.doc(id).set({nome, categoria, tamanhos});
+    auditar(eNovo?'criar':'editar', 'artigo', `${nome} (${categoria}) · ` + Object.entries(tamanhos).map(([t,v])=>`${t}: stock ${v.stock}, mín ${v.min}`).join('; '), id);
     fecharModal('modal-artigo');
     toast('Artigo guardado');
   }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
@@ -914,7 +963,8 @@ async function gravarArtigo(){
 async function removerArtigo(){
   if(!editArtigoId) return;
   if(!confirm('Remover este artigo do catálogo?')) return;
-  try{ await artigosCol.doc(editArtigoId).delete(); fecharModal('modal-artigo'); }
+  const _a = db.artigos.find(x=>x.id===editArtigoId);
+  try{ await artigosCol.doc(editArtigoId).delete(); auditar('apagar','artigo', _a?_a.nome:editArtigoId, editArtigoId); fecharModal('modal-artigo'); }
   catch(e){ toast('Erro ao remover'); }
 }
 
@@ -936,7 +986,8 @@ async function gravarEntrada(){
   if(qtd<=0){ toast('Indica uma quantidade válida'); return; }
   try{
     await artigosCol.doc(a.id).update(new firebase.firestore.FieldPath('tamanhos', tam, 'stock'), firebase.firestore.FieldValue.increment(qtd));
-    await movimentosCol.add({tipo:'entrada', bombeiroId:null, data:hoje(), criadoEm:Date.now(), itens:[{artigoId:a.id, artigoNome:a.nome, tamanho:tam, quantidade:qtd}], obs:'Reposição de armazém', assinaturaEntrega:null, assinaturaRecebido:null});
+    await movimentosCol.add({tipo:'entrada', bombeiroId:null, data:hoje(), criadoEm:Date.now(), criadoPor:(utilizadorAtual()||{}).email||null, itens:[{artigoId:a.id, artigoNome:a.nome, tamanho:tam, quantidade:qtd}], obs:'Reposição de armazém', assinaturaEntrega:null, assinaturaRecebido:null});
+    auditar('criar','movimento', descMov('entrada', null, hoje(), [{artigoNome:a.nome, tamanho:tam, quantidade:qtd}], 'Reposição de armazém'));
     fecharModal('modal-entrada');
     toast('Entrada registada');
   }catch(e){ console.error(e); toast('Erro — verifica a ligação'); }
@@ -995,11 +1046,14 @@ async function gravarBombeiro(){
   if(!nome){ toast('Indica o nome do bombeiro'); return; }
   try{
     if(editBombeiroId){
+      const _b = db.bombeiros.find(x=>x.id===editBombeiroId) || {};
       await bombeirosCol.doc(editBombeiroId).update({nome, numero, posto, quadro});
+      auditar('editar','bombeiro', `${nome} · Nº ${numero||'—'} · ${posto||'—'} · ${quadro} (antes: ${_b.nome||'—'} · Nº ${_b.numero||'—'} · ${_b.posto||'—'} · ${_b.quadro||'Quadro Ativo'})`, editBombeiroId);
       toast('Bombeiro atualizado');
     } else {
       const id = bombeirosCol.doc().id;
       await bombeirosCol.doc(id).set({nome, numero, posto, quadro, atribuicoes:{}});
+      auditar('criar','bombeiro', `${nome} · Nº ${numero||'—'} · ${posto||'—'} · ${quadro}`, id);
       toast('Bombeiro adicionado');
     }
     fecharModal('modal-bombeiro');
@@ -1048,7 +1102,8 @@ function abrirPerfilBombeiro(id, silencioso){
 async function removerBombeiro(){
   if(!perfilAtivoId) return;
   if(!confirm('Remover este bombeiro? O histórico de movimentos será mantido.')) return;
-  try{ await bombeirosCol.doc(perfilAtivoId).delete(); goTo('bombeiros'); }
+  const _nb = nomeBomb(perfilAtivoId);
+  try{ await bombeirosCol.doc(perfilAtivoId).delete(); auditar('apagar','bombeiro', _nb, perfilAtivoId); goTo('bombeiros'); }
   catch(e){ toast('Erro ao remover'); }
 }
 
@@ -1087,6 +1142,7 @@ async function gravarMedidas(){
   });
   try{
     await bombeirosCol.doc(medidasBombeiroId).update({medidas});
+    auditar('editar','medidas', `${nomeBomb(medidasBombeiroId)} · ` + (Object.entries(medidas).map(([k,v])=>`${k}: ${v}`).join('; ')||'sem medidas'), medidasBombeiroId);
     fecharModal('modal-medidas');
     toast('Medidas guardadas');
   }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
@@ -1251,7 +1307,8 @@ async function gravarMovimento(){
       });
 
       if(bombeiroRef) tx.update(bombeiroRef, {atribuicoes});
-      tx.set(movRef, { tipo, bombeiroId, data, criadoEm: Date.now(), itens, obs, assinaturaEntrega: assinaturaEntrega||null, assinaturaRecebido: assinaturaRecebido||null });
+      tx.set(movRef, { tipo, bombeiroId, data, criadoEm: Date.now(), criadoPor:(utilizadorAtual()||{}).email||null, itens, obs, assinaturaEntrega: assinaturaEntrega||null, assinaturaRecebido: assinaturaRecebido||null });
+      tx.set(auditCol.doc(), auditEntry('criar','movimento', descMov(tipo, bombeiroId, data, itens, obs), movRef.id));
     });
 
     ultimoTalao = { id: movRef.id, tipo, bombeiroId, data, itens, obs, assinaturaEntrega, assinaturaRecebido };
@@ -1427,6 +1484,212 @@ function renderEstatisticas(){
     ${card('Cobertura de stock', cobertura.length ? estBarras(cobertura.slice(0,10), 'var(--primary)') : '<div class="empty-state" style="padding:16px 0;"><p>Sem stock com consumo recente.</p></div>', 'Meses que o stock atual dura ao ritmo dos últimos 12 meses (os mais críticos primeiro).')}
     ${semStock.length ? card('Com consumo e sem stock', estBarras(semStock.slice(0,10), 'var(--primary-dark)'), semStock.length>10 ? 'A mostrar os 10 mais consumidos de '+semStock.length+'.' : '') : ''}
   `;
+}
+
+
+/* ---------------- EDITAR MOVIMENTO ---------------- */
+let editMov = null;
+function abrirEdicaoMov(){
+  const m = ultimoTalao && db.movimentos.find(x=>x.id===ultimoTalao.id);
+  if(!m){ toast('Movimento não encontrado'); return; }
+  editMov = { id:m.id, tipo:m.tipo, itens:(m.itens||[]).map(i=>({...i})) };
+  document.getElementById('em-titulo').textContent = 'Editar ' + tipoLabel(m.tipo).toLowerCase();
+  document.getElementById('em-data').value = m.data || hoje();
+  document.getElementById('em-obs').value = m.obs || '';
+  const wrapB = document.getElementById('em-bombeiro-wrap');
+  wrapB.style.display = (m.tipo==='entrada') ? 'none' : 'block';
+  const selB = document.getElementById('em-bombeiro');
+  let opts = db.bombeiros.map(b=>`<option value="${b.id}">${b.nome} (Nº ${b.numero||'—'})</option>`).join('');
+  if(m.bombeiroId && !db.bombeiros.some(b=>b.id===m.bombeiroId)) opts = `<option value="${m.bombeiroId}">(bombeiro removido)</option>` + opts;
+  selB.innerHTML = opts;
+  if(m.bombeiroId) selB.value = m.bombeiroId;
+  document.getElementById('em-artigo').innerHTML = db.artigos.map(a=>`<option value="${a.id}">${a.nome}</option>`).join('');
+  emAtualizarTamanhos();
+  document.getElementById('em-qtd').value = 1;
+  emRenderItens();
+  fecharModal('modal-talao');
+  abrirModal('modal-editar-mov');
+}
+document.getElementById('em-artigo').addEventListener('change', emAtualizarTamanhos);
+function emAtualizarTamanhos(){
+  const a = db.artigos.find(x=>x.id===document.getElementById('em-artigo').value);
+  document.getElementById('em-tamanho').innerHTML = a
+    ? Object.entries(a.tamanhos||{}).map(([tam,t])=>`<option value="${tam}">${tam} (stock: ${t.stock||0})</option>`).join('') : '';
+}
+function emAdicionarItem(){
+  const a = db.artigos.find(x=>x.id===document.getElementById('em-artigo').value);
+  if(!a){ toast('Escolhe um artigo'); return; }
+  const tamanho = document.getElementById('em-tamanho').value;
+  const quantidade = parseInt(document.getElementById('em-qtd').value)||0;
+  if(!tamanho || quantidade<=0){ toast('Indica tamanho e quantidade válidos'); return; }
+  const ex = editMov.itens.find(i=>i.artigoId===a.id && i.tamanho===tamanho);
+  if(ex) ex.quantidade += quantidade;
+  else editMov.itens.push({artigoId:a.id, artigoNome:a.nome, tamanho, quantidade});
+  emRenderItens();
+}
+function emRenderItens(){
+  document.getElementById('em-itens').innerHTML = editMov.itens.map((it,idx)=>`
+    <div class="item-row">
+      <div class="info"><b>${it.artigoNome}</b><span>Tam. ${it.tamanho}</span></div>
+      <input type="number" min="1" value="${it.quantidade}" style="width:64px; padding:7px;" onchange="emMudarQtd(${idx}, this.value)">
+      <button class="rm" onclick="emRemoverItem(${idx})">✕</button>
+    </div>`).join('');
+}
+function emMudarQtd(idx, v){
+  const q = parseInt(v)||0;
+  if(q>0) editMov.itens[idx].quantidade = q;
+  emRenderItens();
+}
+function emRemoverItem(idx){ editMov.itens.splice(idx,1); emRenderItens(); }
+
+async function gravarEdicaoMov(){
+  if(!conectado){ toast('Sem ligação à base de dados'); return; }
+  if(!editMov) return;
+  if(editMov.itens.length===0){ toast('O movimento precisa de pelo menos um artigo'); return; }
+  const data = document.getElementById('em-data').value || hoje();
+  const obs = document.getElementById('em-obs').value.trim();
+  const bombeiroId = editMov.tipo==='entrada' ? null : document.getElementById('em-bombeiro').value;
+  if(editMov.tipo!=='entrada' && !bombeiroId){ toast('Seleciona um bombeiro'); return; }
+  if(!confirm('Guardar alterações?\n\nO stock e as atribuições deste movimento serão recalculados.')) return;
+
+  const novo = { data, bombeiroId, obs, itens: editMov.itens.map(i=>({artigoId:i.artigoId, artigoNome:i.artigoNome, tamanho:i.tamanho, quantidade:i.quantidade})) };
+  const movRef = movimentosCol.doc(editMov.id);
+  try{
+    await dbFire.runTransaction(async (tx)=>{
+      const movSnap = await tx.get(movRef);
+      if(!movSnap.exists) throw new Error('movimento inexistente');
+      const velho = movSnap.data();
+      const tipo = velho.tipo;
+      const itensVelhos = velho.itens || [];
+
+      const aids = [...new Set([...itensVelhos, ...novo.itens].map(i=>i.artigoId))];
+      const bids = [...new Set([velho.bombeiroId, novo.bombeiroId].filter(Boolean))];
+      const aSnap = {}, bSnap = {};
+      for(const aid of aids) aSnap[aid] = await tx.get(artigosCol.doc(aid));
+      for(const bid of bids) bSnap[bid] = await tx.get(bombeirosCol.doc(bid));
+
+      // stock: desfaz o efeito antigo e aplica o novo
+      const sinalStock = (tipo==='entrada' || tipo==='devolucao') ? +1 : -1;
+      const delta = {};
+      const acumula = (itens, sinal)=>itens.forEach(i=>{
+        const k = i.artigoId + '||' + i.tamanho;
+        delta[k] = (delta[k]||0) + sinal * sinalStock * i.quantidade;
+      });
+      acumula(itensVelhos, -1);
+      acumula(novo.itens, +1);
+      Object.entries(delta).forEach(([k,dv])=>{
+        if(!dv) return;
+        const [aid, tam] = k.split('||');
+        const s = aSnap[aid];
+        if(!s || !s.exists) return;
+        const atual = (((s.data().tamanhos||{})[tam])||{}).stock || 0;
+        tx.update(artigosCol.doc(aid), new firebase.firestore.FieldPath('tamanhos', tam, 'stock'), Math.max(0, atual + dv));
+      });
+
+      // atribuições dos bombeiros
+      if(tipo!=='entrada'){
+        const atr = {};
+        bids.forEach(b=>{ atr[b] = bSnap[b].exists ? {...(bSnap[b].data().atribuicoes||{})} : null; });
+        const aplica = (bid, itens, sinal, dataRef)=>{
+          const a = atr[bid]; if(!a) return;
+          itens.forEach(i=>{
+            const chave = i.artigoId + '__' + i.tamanho;
+            const soma = (tipo==='entrega') ? sinal>0 : sinal<0;
+            const atual = a[chave];
+            if(soma){
+              a[chave] = { artigoId:i.artigoId, artigoNome:i.artigoNome, tamanho:i.tamanho, quantidade:(atual?atual.quantidade:0)+i.quantidade, desde: atual?atual.desde:dataRef };
+            } else if(atual){
+              const n = atual.quantidade - i.quantidade;
+              if(n<=0) delete a[chave]; else a[chave] = {...atual, quantidade:n};
+            }
+          });
+        };
+        if(velho.bombeiroId) aplica(velho.bombeiroId, itensVelhos, -1, velho.data);
+        if(novo.bombeiroId) aplica(novo.bombeiroId, novo.itens, +1, novo.data);
+        Object.entries(atr).forEach(([bid,a])=>{ if(a) tx.update(bombeirosCol.doc(bid), {atribuicoes:a}); });
+      }
+
+      tx.update(movRef, { data:novo.data, bombeiroId:novo.bombeiroId, obs:novo.obs, itens:novo.itens, editadoEm:Date.now(), editadoPor:(utilizadorAtual()||{}).email||null });
+      tx.set(auditCol.doc(), auditEntry('editar','movimento', 'ANTES: ' + descMov(tipo, velho.bombeiroId, velho.data, itensVelhos, velho.obs) + ' || DEPOIS: ' + descMov(tipo, novo.bombeiroId, novo.data, novo.itens, novo.obs), editMov.id));
+    });
+    fecharModal('modal-editar-mov');
+    editMov = null;
+    toast('Movimento atualizado');
+  }catch(err){
+    console.error(err);
+    toast('Erro ao guardar — verifica a ligação');
+  }
+}
+
+
+/* ---------------- AUDITORIA (registo de alterações) ---------------- */
+function utilizadorAtual(){
+  try{ const u = firebase.auth().currentUser; return u ? {email:u.email||'', uid:u.uid} : null; }catch(e){ return null; }
+}
+function auditEntry(acao, entidade, detalhe, refId){
+  const u = utilizadorAtual() || {email:'', uid:''};
+  return { quando: Date.now(), utilizador: u.email, uid: u.uid, acao, entidade, detalhe: String(detalhe||'').slice(0,900), refId: refId||null };
+}
+function auditar(acao, entidade, detalhe, refId){
+  if(!auditCol || !utilizadorAtual()) return;
+  auditCol.add(auditEntry(acao, entidade, detalhe, refId)).catch(e=>console.error('auditoria', e));
+}
+function nomeBomb(id){ const b = id && db.bombeiros.find(x=>x.id===id); return b ? b.nome : (id ? '(bombeiro removido)' : '—'); }
+function resumoItens(itens){ return (itens||[]).map(i=>`${i.artigoNome} (${i.tamanho}) ×${i.quantidade}`).join(', '); }
+function descMov(tipo, bombeiroId, data, itens, obs){
+  return `${tipoLabel(tipo)} · ${tipo==='entrada' ? 'armazém' : nomeBomb(bombeiroId)} · ${fmtData(data||hoje())} · ${resumoItens(itens)}${obs?' · obs: '+obs:''}`;
+}
+function escHtml(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+let eAdmin = false;
+function verificarAdmin(){
+  eAdmin = false;
+  const btn = document.getElementById('btn-auditoria');
+  btn.style.display = 'none';
+  if(!auditCol) return;
+  auditCol.orderBy('quando','desc').limit(1).get()
+    .then(()=>{ eAdmin = true; btn.style.display = 'block'; })
+    .catch(()=>{ eAdmin = false; btn.style.display = 'none'; });
+}
+let auditCache = [];
+function abrirAuditoria(){
+  if(!eAdmin){ toast('Sem permissão'); return; }
+  fecharModal('modal-config');
+  abrirModal('modal-auditoria');
+  carregarAuditoria();
+}
+async function carregarAuditoria(){
+  const lista = document.getElementById('aud-lista');
+  lista.innerHTML = '<div class="empty-state" style="padding:16px 0;"><p>A carregar…</p></div>';
+  try{
+    const snap = await auditCol.orderBy('quando','desc').limit(300).get();
+    auditCache = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    renderAuditoria();
+  }catch(e){
+    console.error(e);
+    lista.innerHTML = '<div class="empty-state" style="padding:16px 0;"><p>Não foi possível carregar o registo.</p></div>';
+  }
+}
+document.getElementById('aud-busca').addEventListener('input', renderAuditoria);
+function renderAuditoria(){
+  const q = (document.getElementById('aud-busca').value||'').toLowerCase();
+  const cor = {criar:'#E4EAEC;color:#3E4C54', editar:'#F2E2C2;color:#7A5A00', apagar:'#F7E4E2;color:#8E1C16', repor:'#F7E4E2;color:#8E1C16', exportar:'#E1EBE1;color:#4C7A4F'};
+  const itens = auditCache.filter(a=>!q || (`${a.utilizador} ${a.acao} ${a.entidade} ${a.detalhe}`).toLowerCase().includes(q));
+  document.getElementById('aud-lista').innerHTML = itens.length===0
+    ? '<div class="empty-state" style="padding:16px 0;"><p>Sem registos.</p></div>'
+    : itens.map(a=>{
+        const d = new Date(a.quando||0);
+        const quando = d.toLocaleDateString('pt-PT') + ' ' + d.toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'});
+        return `<div class="mov-item" style="flex-direction:column; gap:4px;">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span class="mov-tag" style="background:${cor[a.acao]||'#E4EAEC;color:#3E4C54'}">${escHtml((a.acao||'').toUpperCase())}</span>
+            <span style="font-size:12.5px; font-weight:600;">${escHtml(a.entidade||'')}</span>
+            <span class="mov-date" style="margin-left:auto;">${quando}</span>
+          </div>
+          <div class="mov-sub" style="font-weight:600; color:var(--ink);">${escHtml(a.utilizador||'(desconhecido)')}</div>
+          <div class="mov-sub">${escHtml(a.detalhe||'')}</div>
+        </div>`;
+      }).join('');
 }
 
 /* ---------------- INIT ---------------- */
