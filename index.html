@@ -326,6 +326,12 @@
       </div>
     </section>
 
+    <section class="view" id="view-estatisticas">
+      <h2 class="section-title">Estatísticas</h2>
+      <div class="filter-row" id="est-filters"></div>
+      <div id="est-conteudo"></div>
+    </section>
+
     <section class="view" id="view-historico">
       <h2 class="section-title">Histórico de movimentos</h2>
       <div class="filter-row" id="hist-filters">
@@ -363,6 +369,10 @@
       <button data-tab="historico">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
         Histórico
+      </button>
+      <button data-tab="estatisticas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        Estatísticas
       </button>
     </div>
   </nav>
@@ -748,6 +758,7 @@ function goTo(tab){
   if(tab==='bombeiros') renderBombeiros();
   if(tab==='movimento') renderMovimentoForm();
   if(tab==='historico') renderHistorico();
+  if(tab==='estatisticas') renderEstatisticas();
   window.scrollTo(0,0);
 }
 document.querySelectorAll('nav.tabbar button').forEach(btn=>{ btn.addEventListener('click', ()=>goTo(btn.dataset.tab)); });
@@ -761,6 +772,7 @@ function refreshView(){
   if(currentTab==='bombeiros') renderBombeiros();
   if(currentTab==='bombeiro-perfil' && perfilAtivoId) abrirPerfilBombeiro(perfilAtivoId, true);
   if(currentTab==='historico') renderHistorico();
+  if(currentTab==='estatisticas') renderEstatisticas();
 }
 
 function toast(msg){
@@ -1306,6 +1318,116 @@ function gerarTalaoHTML(m){
     </div>`;
 }
 function imprimirTalao(){ if(ultimoTalao) window.print(); }
+
+
+/* ---------------- ESTATÍSTICAS ---------------- */
+let estPeriodo = 'todos';
+const MESES_ABR = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+function qtdMov(m){ return (m.itens||[]).reduce((s,i)=>s+(i.quantidade||0),0); }
+function estBarras(items, cor){
+  if(items.length===0) return '<div class="empty-state" style="padding:16px 0;"><p>Sem dados neste período.</p></div>';
+  const max = Math.max(...items.map(i=>i.valor), 1);
+  return items.map(i=>`
+    <div style="margin-bottom:9px;">
+      <div style="display:flex; justify-content:space-between; gap:8px; font-size:12.5px; margin-bottom:3px;">
+        <span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${i.label}</span>
+        <span style="font-family:var(--font-mono); font-weight:600; flex-shrink:0;">${i.valor}${i.extra?' <span style="color:var(--ink-soft); font-weight:500;">'+i.extra+'</span>':''}</span>
+      </div>
+      <div style="background:var(--bg); border-radius:4px; height:7px;"><div style="width:${Math.max(2,(i.valor/max)*100)}%; height:7px; border-radius:4px; background:${cor||'var(--primary)'};"></div></div>
+    </div>`).join('');
+}
+function estTop(map, n){
+  return Object.entries(map).map(([label,valor])=>({label,valor})).sort((a,b)=>b.valor-a.valor).slice(0,n);
+}
+function renderEstatisticas(){
+  const anos = [...new Set(db.movimentos.map(m=>(m.data||'').slice(0,4)).filter(Boolean))].sort().reverse();
+  if(estPeriodo!=='todos' && !anos.includes(estPeriodo)) estPeriodo='todos';
+  document.getElementById('est-filters').innerHTML =
+    ['todos',...anos].map(a=>`<div class="filter-chip ${a===estPeriodo?'active':''}" onclick="estPeriodo='${a}'; renderEstatisticas();">${a==='todos'?'Tudo':a}</div>`).join('');
+
+  const wrap = document.getElementById('est-conteudo');
+  if(db.movimentos.length===0){
+    wrap.innerHTML = '<div class="empty-state"><div class="ico">📊</div><p>Ainda não há movimentos para analisar.</p></div>';
+    return;
+  }
+  const movs = db.movimentos.filter(m=> estPeriodo==='todos' || (m.data||'').startsWith(estPeriodo));
+  const tot = {entrega:0, devolucao:0, baixa:0, entrada:0};
+  movs.forEach(m=>{ if(tot[m.tipo]!==undefined) tot[m.tipo]+=qtdMov(m); });
+
+  // evolução: por ano (Tudo) ou por mês (ano escolhido)
+  const evo = {};
+  movs.forEach(m=>{
+    const d = m.data||''; if(!d) return;
+    const chave = estPeriodo==='todos' ? d.slice(0,4) : d.slice(5,7);
+    (evo[chave] = evo[chave] || {entrega:0, devolucao:0, baixa:0, entrada:0});
+    if(evo[chave][m.tipo]!==undefined) evo[chave][m.tipo]+=qtdMov(m);
+  });
+  let chavesEvo = Object.keys(evo).sort();
+  if(estPeriodo!=='todos') chavesEvo = ['01','02','03','04','05','06','07','08','09','10','11','12'].filter(k=>evo[k]);
+  const evoItems = chavesEvo.map(k=>({
+    label: estPeriodo==='todos' ? k : MESES_ABR[parseInt(k,10)-1],
+    valor: evo[k].entrega,
+    extra: `· dev ${evo[k].devolucao} · baixas ${evo[k].baixa}`
+  }));
+
+  // por artigo / por artigo+tamanho
+  const entregasArt = {}, entregasTam = {}, baixasArt = {}, porBomb = {};
+  movs.forEach(m=>{
+    (m.itens||[]).forEach(i=>{
+      const q = i.quantidade||0;
+      if(m.tipo==='entrega'){
+        entregasArt[i.artigoNome] = (entregasArt[i.artigoNome]||0)+q;
+        const k = i.artigoNome+' · '+i.tamanho;
+        entregasTam[k] = (entregasTam[k]||0)+q;
+        if(m.bombeiroId) porBomb[m.bombeiroId] = (porBomb[m.bombeiroId]||0)+q;
+      } else if(m.tipo==='baixa'){
+        baixasArt[i.artigoNome] = (baixasArt[i.artigoNome]||0)+q;
+      }
+    });
+  });
+  const bombItens = Object.entries(porBomb).map(([id,valor])=>{
+    const b = db.bombeiros.find(x=>x.id===id);
+    const atual = b ? Object.values(b.atribuicoes||{}).reduce((s,a)=>s+(a.quantidade||0),0) : 0;
+    return {label: b ? b.nome : '(removido)', valor, extra:`· em posse ${atual}`};
+  }).sort((a,b)=>b.valor-a.valor).slice(0,10);
+
+  // cobertura (consumo dos últimos 12 meses, independente do filtro)
+  const limite = new Date(); limite.setFullYear(limite.getFullYear()-1);
+  const limiteStr = limite.toISOString().slice(0,10);
+  const cons12 = {};
+  db.movimentos.forEach(m=>{
+    if(m.tipo!=='entrega' || (m.data||'')<limiteStr) return;
+    (m.itens||[]).forEach(i=>{ const k=i.artigoId+'||'+i.tamanho; cons12[k]=(cons12[k]||0)+(i.quantidade||0); });
+  });
+  const cobertura = [], semStock = [];
+  db.artigos.forEach(a=>Object.entries(a.tamanhos||{}).forEach(([tam,t])=>{
+    const c = cons12[a.id+'||'+tam]; if(!c) return;
+    const stock = t.stock||0;
+    if(stock>0) cobertura.push({label:`${a.nome} · ${tam}`, valor: Math.round((stock/(c/12))*10)/10, extra:`meses · stock ${stock}`});
+    else semStock.push({label:`${a.nome} · ${tam}`, valor:c, extra:'entregues em 12 meses'});
+  }));
+  cobertura.sort((a,b)=>a.valor-b.valor);
+  semStock.sort((a,b)=>b.valor-a.valor);
+
+  const card = (titulo, corpo, nota) => `
+    <h2 class="section-title" style="margin-top:6px;">${titulo}</h2>
+    <div class="card">${corpo}${nota?`<div class="helper" style="margin-top:6px;">${nota}</div>`:''}</div>`;
+
+  wrap.innerHTML = `
+    <div class="stat-row" style="grid-template-columns:1fr 1fr 1fr;">
+      <div class="stat"><div class="num">${tot.entrega}</div><div class="lbl">Entregues</div></div>
+      <div class="stat"><div class="num">${tot.devolucao}</div><div class="lbl">Devolvidas</div></div>
+      <div class="stat"><div class="num">${tot.baixa}</div><div class="lbl">Baixas</div></div>
+    </div>
+    ${card(estPeriodo==='todos'?'Entregas por ano':'Entregas por mês', estBarras(evoItems))}
+    ${card('Artigos mais entregues', estBarras(estTop(entregasArt,10)))}
+    ${card('Consumo por tamanho', estBarras(estTop(entregasTam,15), 'var(--steel)'), 'Útil para decidir quantidades a repor por tamanho.')}
+    ${card('Baixas por artigo', estBarras(estTop(baixasArt,10), 'var(--accent)'), 'Artigos abatidos com mais frequência (desgaste).')}
+    ${card('Entregas por bombeiro', estBarras(bombItens, 'var(--success)'))}
+    ${card('Cobertura de stock', cobertura.length ? estBarras(cobertura.slice(0,10), 'var(--primary)') : '<div class="empty-state" style="padding:16px 0;"><p>Sem stock com consumo recente.</p></div>', 'Meses que o stock atual dura ao ritmo dos últimos 12 meses (os mais críticos primeiro).')}
+    ${semStock.length ? card('Com consumo e sem stock', estBarras(semStock.slice(0,10), 'var(--primary-dark)'), semStock.length>10 ? 'A mostrar os 10 mais consumidos de '+semStock.length+'.' : '') : ''}
+  `;
+}
 
 /* ---------------- INIT ---------------- */
 function atualizarData(){
