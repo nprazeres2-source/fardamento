@@ -640,9 +640,9 @@ function ligarComConfig(cfg){
     });
   }catch(e){
     console.error(e);
-    toast('Não foi possível ligar — verifica a configuração');
+    toast('Não foi possível ligar — ' + descreveErro(e));
     const st = document.getElementById('conn-status');
-    st.textContent = '● erro de ligação'; st.className='err';
+    st.textContent = '● erro: ' + (e.code || 'ligação'); st.className='err';
   }
 }
 function msgErroAuth(e){
@@ -652,7 +652,7 @@ function msgErroAuth(e){
   if(c==='auth/too-many-requests') return 'Demasiadas tentativas. Tenta novamente daqui a pouco.';
   if(c==='auth/network-request-failed') return 'Sem ligação à internet.';
   if(c==='auth/operation-not-allowed') return 'Início de sessão por email não está ativo no Firebase.';
-  return 'Não foi possível iniciar sessão.';
+  return 'Não foi possível iniciar sessão' + (c ? ' (' + c.replace('auth/','') + ').' : '.');
 }
 async function entrar(){
   const email = document.getElementById('login-email').value.trim();
@@ -763,15 +763,15 @@ function attachListeners(){
   artigosCol.onSnapshot(snap=>{
     db.artigos = snap.docs.map(d=>({id:d.id, ...d.data()}));
     refreshView();
-  }, err=>{ console.error(err); toast('Erro de sincronização de artigos'); });
+  }, err=>{ console.error(err); toast('Sincronização de artigos: ' + descreveErro(err)); });
   bombeirosCol.onSnapshot(snap=>{
     db.bombeiros = snap.docs.map(d=>({id:d.id, ...d.data()}));
     refreshView();
-  }, err=>{ console.error(err); toast('Erro de sincronização de bombeiros'); });
+  }, err=>{ console.error(err); toast('Sincronização de bombeiros: ' + descreveErro(err)); });
   movimentosCol.onSnapshot(snap=>{
     db.movimentos = snap.docs.map(d=>({id:d.id, ...d.data()}));
     refreshView();
-  }, err=>{ console.error(err); toast('Erro de sincronização de movimentos'); });
+  }, err=>{ console.error(err); toast('Sincronização de movimentos: ' + descreveErro(err)); });
 }
 async function seedSeNecessario(){
   try{
@@ -822,11 +822,21 @@ function refreshView(){
   if(currentTab==='estatisticas') renderEstatisticas();
 }
 
+function descreveErro(e){
+  const c = ((e && e.code) || '').replace('firestore/','');
+  if(c==='permission-denied') return 'sem permissão — verifica as regras do Firestore e a sessão';
+  if(c==='unauthenticated') return 'sessão expirada — entra novamente';
+  if(c==='unavailable') return 'sem ligação ao servidor';
+  if(c==='failed-precondition') return 'operação não permitida (' + c + ')';
+  if(c==='resource-exhausted') return 'quota do Firebase esgotada';
+  return c || ((e && e.message) ? String(e.message).slice(0,90) : 'erro desconhecido');
+}
 function toast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'), 2200);
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>t.classList.remove('show'), msg.length>45 ? 5000 : 2200);
 }
 function abrirModal(id){ document.getElementById(id).classList.remove('hidden'); }
 function fecharModal(id){ document.getElementById(id).classList.add('hidden'); }
@@ -958,7 +968,7 @@ async function gravarArtigo(){
     auditar(eNovo?'criar':'editar', 'artigo', `${nome} (${categoria}) · ` + Object.entries(tamanhos).map(([t,v])=>`${t}: stock ${v.stock}, mín ${v.min}`).join('; '), id);
     fecharModal('modal-artigo');
     toast('Artigo guardado');
-  }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
+  }catch(e){ console.error(e); toast('Erro ao guardar — ' + descreveErro(e)); }
 }
 async function removerArtigo(){
   if(!editArtigoId) return;
@@ -990,7 +1000,7 @@ async function gravarEntrada(){
     auditar('criar','movimento', descMov('entrada', null, hoje(), [{artigoNome:a.nome, tamanho:tam, quantidade:qtd}], 'Reposição de armazém'));
     fecharModal('modal-entrada');
     toast('Entrada registada');
-  }catch(e){ console.error(e); toast('Erro — verifica a ligação'); }
+  }catch(e){ console.error(e); toast('Erro — ' + descreveErro(e)); }
 }
 
 /* ---------------- BOMBEIROS ---------------- */
@@ -1057,7 +1067,7 @@ async function gravarBombeiro(){
       toast('Bombeiro adicionado');
     }
     fecharModal('modal-bombeiro');
-  }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
+  }catch(e){ console.error(e); toast('Erro ao guardar — ' + descreveErro(e)); }
 }
 function iniciais(nome){ return nome.split(' ').filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join(''); }
 function abrirPerfilBombeiro(id, silencioso){
@@ -1145,7 +1155,7 @@ async function gravarMedidas(){
     auditar('editar','medidas', `${nomeBomb(medidasBombeiroId)} · ` + (Object.entries(medidas).map(([k,v])=>`${k}: ${v}`).join('; ')||'sem medidas'), medidasBombeiroId);
     fecharModal('modal-medidas');
     toast('Medidas guardadas');
-  }catch(e){ console.error(e); toast('Erro ao guardar — verifica a ligação'); }
+  }catch(e){ console.error(e); toast('Erro ao guardar — ' + descreveErro(e)); }
 }
 
 /* ---------------- ASSINATURA DIGITAL ---------------- */
@@ -1321,7 +1331,7 @@ async function gravarMovimento(){
     abrirModal('modal-talao');
   }catch(err){
     console.error(err);
-    toast('Erro ao gravar — verifica a ligação');
+    toast('Erro ao gravar — ' + descreveErro(err));
   }
 }
 
@@ -1617,7 +1627,7 @@ async function gravarEdicaoMov(){
     toast('Movimento atualizado');
   }catch(err){
     console.error(err);
-    toast('Erro ao guardar — verifica a ligação');
+    toast('Erro ao guardar — ' + descreveErro(err));
   }
 }
 
