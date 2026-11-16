@@ -12,6 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <style>
   :root{
@@ -484,6 +485,20 @@
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="modal-login" style="z-index:70; align-items:center;">
+  <div class="modal" style="border-radius:18px; max-width:380px; margin:0 16px;">
+    <div style="text-align:center; margin-bottom:6px;"><h3>Iniciar sessão</h3></div>
+    <p class="helper" style="text-align:center;">Fardamento — acesso reservado</p>
+    <label>Email</label>
+    <input type="email" id="login-email" autocomplete="username" placeholder="nome@exemplo.pt" style="width:100%; border:1px solid var(--line); border-radius:9px; padding:11px 12px; font-size:14.5px;">
+    <label>Senha</label>
+    <input type="password" id="login-senha" autocomplete="current-password" placeholder="••••••••" style="width:100%; border:1px solid var(--line); border-radius:9px; padding:11px 12px; font-size:14.5px;" onkeydown="if(event.key==='Enter') entrar()">
+    <div id="login-erro" style="color:var(--primary-dark); font-size:12.5px; font-weight:600; margin-top:8px; min-height:16px;"></div>
+    <button class="btn btn-primary" style="margin-top:8px;" onclick="entrar()">Entrar</button>
+    <button class="btn-danger-text" style="display:block; margin:6px auto 0; color:var(--ink-soft);" onclick="recuperarSenha()">Esqueci-me da senha</button>
+  </div>
+</div>
+
 <div class="modal-overlay hidden" id="modal-config">
   <div class="modal">
     <button class="modal-close" onclick="tentarFecharConfig()">✕</button>
@@ -502,6 +517,7 @@
     <button class="btn btn-ghost" id="btn-restore" style="margin-top:14px; display:none; border-color:var(--primary); color:var(--primary);" onclick="document.getElementById('input-restore').click()">📤 Repor cópia de segurança</button>
     <input type="file" id="input-restore" accept=".json,application/json" style="display:none;" onchange="if(this.files[0]) importarBackup(this.files[0]); this.value='';">
     <p class="helper" id="restore-helper" style="display:none; color:var(--primary-dark); font-weight:600;">⚠️ Substitui TODOS os dados atuais (em todos os equipamentos ligados) pelos do ficheiro escolhido. Não pode ser desfeito.</p>
+    <button class="btn btn-ghost" id="btn-logout" style="margin-top:14px; display:none;" onclick="terminarSessao()">Terminar sessão</button>
     <button class="btn-danger-text" id="cfg-remover" style="display:none;" onclick="desligarFirebase()">Desligar e remover configuração deste equipamento</button>
   </div>
 </div>
@@ -540,6 +556,7 @@ function ligarFirebase(){
   localStorage.setItem('firebaseConfig', JSON.stringify(cfg));
   ligarComConfig(cfg);
 }
+let listenersAtivos=false;
 function ligarComConfig(cfg){
   try{
     if(!firebase.apps.length) firebase.initializeApp(cfg);
@@ -548,24 +565,65 @@ function ligarComConfig(cfg){
     artigosCol = dbFire.collection('artigos');
     bombeirosCol = dbFire.collection('bombeiros');
     movimentosCol = dbFire.collection('movimentos');
-    attachListeners();
-    seedSeNecessario();
-    conectado = true;
-    document.querySelector('#modal-config .modal-close').style.display='block';
-    document.getElementById('cfg-remover').style.display='block';
-    document.getElementById('btn-backup').style.display='block';
-    document.getElementById('backup-helper').style.display='block';
-    document.getElementById('btn-restore').style.display='block';
-    document.getElementById('restore-helper').style.display='block';
     fecharModal('modal-config');
-    const st = document.getElementById('conn-status');
-    st.textContent = '● sincronizado'; st.className='ok';
+    firebase.auth().onAuthStateChanged(user=>{
+      const st = document.getElementById('conn-status');
+      if(user){
+        if(!listenersAtivos){ attachListeners(); listenersAtivos=true; }
+        seedSeNecessario();
+        conectado = true;
+        document.querySelector('#modal-config .modal-close').style.display='block';
+        ['cfg-remover','btn-backup','btn-restore','btn-logout'].forEach(i=>document.getElementById(i).style.display='block');
+        ['backup-helper','restore-helper'].forEach(i=>document.getElementById(i).style.display='block');
+        fecharModal('modal-login');
+        st.textContent = '● ' + (user.email||'sincronizado'); st.className='ok';
+      } else {
+        conectado = false;
+        st.textContent = '● sem sessão'; st.className='';
+        abrirModal('modal-login');
+      }
+    });
   }catch(e){
     console.error(e);
     toast('Não foi possível ligar — verifica a configuração');
     const st = document.getElementById('conn-status');
     st.textContent = '● erro de ligação'; st.className='err';
   }
+}
+function msgErroAuth(e){
+  const c = (e && e.code) || '';
+  if(c==='auth/invalid-credential' || c==='auth/wrong-password' || c==='auth/user-not-found' || c==='auth/invalid-login-credentials') return 'Email ou senha incorretos.';
+  if(c==='auth/invalid-email') return 'Email inválido.';
+  if(c==='auth/too-many-requests') return 'Demasiadas tentativas. Tenta novamente daqui a pouco.';
+  if(c==='auth/network-request-failed') return 'Sem ligação à internet.';
+  if(c==='auth/operation-not-allowed') return 'Início de sessão por email não está ativo no Firebase.';
+  return 'Não foi possível iniciar sessão.';
+}
+async function entrar(){
+  const email = document.getElementById('login-email').value.trim();
+  const senha = document.getElementById('login-senha').value;
+  const erro = document.getElementById('login-erro');
+  erro.textContent = '';
+  if(!email || !senha){ erro.textContent = 'Indica o email e a senha.'; return; }
+  try{
+    await firebase.auth().signInWithEmailAndPassword(email, senha);
+    document.getElementById('login-senha').value = '';
+  }catch(e){ console.error(e); erro.textContent = msgErroAuth(e); }
+}
+async function recuperarSenha(){
+  const email = document.getElementById('login-email').value.trim();
+  const erro = document.getElementById('login-erro');
+  if(!email){ erro.textContent = 'Escreve o teu email primeiro.'; return; }
+  try{
+    await firebase.auth().sendPasswordResetEmail(email);
+    erro.style.color = 'var(--success)';
+    erro.textContent = 'Enviámos um email para repor a senha.';
+  }catch(e){ erro.style.color = 'var(--primary-dark)'; erro.textContent = msgErroAuth(e); }
+}
+async function terminarSessao(){
+  if(!confirm('Terminar sessão neste equipamento?')) return;
+  try{ await firebase.auth().signOut(); fecharModal('modal-config'); }
+  catch(e){ toast('Erro ao terminar sessão'); }
 }
 function desligarFirebase(){
   if(!confirm('Remover a configuração deste equipamento? Vais precisar de colar novamente a configuração para voltar a sincronizar.')) return;
